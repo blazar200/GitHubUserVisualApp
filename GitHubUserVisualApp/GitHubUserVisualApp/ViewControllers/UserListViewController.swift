@@ -13,21 +13,13 @@ class UserListViewController: UIViewController {
     @IBOutlet weak var userListSearchBar: UISearchBar!
     @IBOutlet weak var userListTableView: UITableView!
     
-    // Actual Data to use
     var userInfo: [UserBasic] = []
-    var filteredUserInfo: [UserBasic] = []
-    
-    // Dummy Data
-    var useDummyData: Bool = false
-    var dummyData: [String] = []
-    var isFiltering: Bool = false
-    var filterdDummyData: [String] = []
+    var throttle: Throttle?
     
     override func viewDidLoad() {
         super.viewDidLoad()
         
         self.setUpUI()
-//        self.setUpDummyData()
     }
         
     private func setUpUI() {
@@ -41,17 +33,8 @@ class UserListViewController: UIViewController {
         self.userListTableView.register(UserListCell.self, forCellReuseIdentifier: "userListCell")
     }
     
-    private func setUpDummyData() {
-        self.useDummyData = true
-        for i in 0..<30 {
-            self.dummyData.append("\(i): value\(i)")
-        }
-    }
-    
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        
-        self.pullUsersIfNeeded()
         
         NotificationCenter.default.addObserver(self, selector: #selector(hideKeyboard(notification:)), name: UIResponder.keyboardWillHideNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(showKeyboard(notification:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
@@ -95,19 +78,7 @@ extension UserListViewController: UITableViewDelegate, UITableViewDataSource {
     }
     
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        if self.useDummyData {
-            if isFiltering {
-                return self.filterdDummyData.count
-            } else {
-                return self.dummyData.count
-            }
-        } else {
-            if isFiltering {
-                return self.filteredUserInfo.count
-            } else {
-                return self.userInfo.count
-            }
-        }
+        return self.userInfo.count
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -116,50 +87,23 @@ extension UserListViewController: UITableViewDelegate, UITableViewDataSource {
             cell = UserListCell(style: .value1, reuseIdentifier: "userListCell")
         }
         
-        if self.useDummyData {
-            if isFiltering {
-                cell.textLabel?.text = self.filterdDummyData[indexPath.row]
-            } else {
-                cell.textLabel?.text = self.dummyData[indexPath.row]
-            }
-            cell.detailTextLabel?.text = "Repo: \(indexPath.row)"
-            cell.imageView?.image = UIImage(named: "defaultAvatar.png")
+        cell.textLabel?.text = self.userInfo[indexPath.row].user.login
+        if let count = self.userInfo[indexPath.row].repos?.count {
+            cell.detailTextLabel?.text = "Repo: \(count)"
         } else {
-            if isFiltering {
-                cell.textLabel?.text = self.filteredUserInfo[indexPath.row].user.login
-                if let count = self.filteredUserInfo[indexPath.row].repos?.count {
-                    cell.detailTextLabel?.text = "Repo: \(count)"
-                } else {
-                    cell.detailTextLabel?.text = "Repo: loading..."
-                }
-
-                if let image = self.filteredUserInfo[indexPath.row].avatar {
-                    cell.imageView?.image = image
-                } else {
-                    cell.imageView?.image = UIImage(named: "defaultAvatar.png")
-                }
-            } else {
-                cell.textLabel?.text = self.userInfo[indexPath.row].user.login
-                if let count = self.userInfo[indexPath.row].repos?.count {
-                    cell.detailTextLabel?.text = "Repo: \(count)"
-                } else {
-                    cell.detailTextLabel?.text = "Repo: loading..."
-                }
-
-                if let image = self.userInfo[indexPath.row].avatar {
-                    cell.imageView?.image = image
-                } else {
-                    cell.imageView?.image = UIImage(named: "defaultAvatar.png")
-                }
-
-            }
+            cell.detailTextLabel?.text = "Repo: loading..."
+        }
+        
+        if let image = self.userInfo[indexPath.row].avatar {
+            cell.imageView?.image = image
+        } else {
+            cell.imageView?.image = UIImage(named: "defaultAvatar.png")
         }
         
         return cell
     }
-        
+    
     func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        guard !self.useDummyData else { return }
         self.pullReposIfNeeded(tableView: tableView, indexPath: indexPath)
         self.pullImagesIfNeeded(tableView: tableView, indexPath: indexPath)
     }
@@ -168,11 +112,7 @@ extension UserListViewController: UITableViewDelegate, UITableViewDataSource {
         tableView.deselectRow(at: indexPath, animated: true)
         guard let vc = UserDetailViewController.createViewController() else { return }
         vc.title = "Github Searcher"
-        if isFiltering {
-            vc.userInfo = self.filteredUserInfo[indexPath.row]
-        } else {
-            vc.userInfo = self.userInfo[indexPath.row]
-        }
+        vc.userInfo = self.userInfo[indexPath.row]
         self.navigationController?.pushViewController(vc, animated: true)
     }
     
@@ -216,11 +156,7 @@ extension UserListViewController {
                 return
             }
             
-            if strongSelf.isFiltering {
-                strongSelf.filteredUserInfo[indexPath.row].repos = repos
-            } else {
-                strongSelf.userInfo[indexPath.row].repos = repos
-            }
+            strongSelf.userInfo[indexPath.row].repos = repos
             
             DispatchQueue.main.async {
                 tableView.reloadRows(at: [indexPath], with: .automatic)
@@ -242,11 +178,8 @@ extension UserListViewController {
                 strongSelf.presentAlert(text: "Data is not an image")
                 return
             }
-            if strongSelf.isFiltering {
-                strongSelf.filteredUserInfo[indexPath.row].avatar = image
-            } else {
-                strongSelf.userInfo[indexPath.row].avatar = image
-            }
+            
+            strongSelf.userInfo[indexPath.row].avatar = image
             
             DispatchQueue.main.async {
                 tableView.reloadRows(at: [indexPath], with: .automatic)
@@ -259,29 +192,26 @@ extension UserListViewController {
 extension UserListViewController: UISearchBarDelegate {
     
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
-        guard !searchText.isEmpty else {
-            self.isFiltering = false
-            DispatchQueue.main.async {
-                self.userListTableView.reloadData()
+        guard !searchText.isEmpty else { return }
+        throttle?.cancel()
+        throttle = Throttle.init({
+            print("started \(searchText)")
+            Networking.shared.fetchUsers(searchText) { [weak self] (data, error) in
+                guard let strongSelf = self else { return }
+                guard error == nil else {
+                    return
+                }
+                guard let users = data as? [User] else {
+                    return
+                }
+                users.forEach{
+                    strongSelf.userInfo.append(UserBasic(user: $0, avatar: nil, repos: nil))
+                }
+                DispatchQueue.main.async {
+                    strongSelf.userListTableView.reloadData()
+                }
             }
-            return
-        }
-        self.isFiltering = true
-        
-        if self.useDummyData {
-            self.filterdDummyData = self.dummyData.filter {
-                return ($0.lowercased().contains(searchText.lowercased()))
-            }
-        } else {
-            self.filteredUserInfo.removeAll()
-            self.filteredUserInfo = self.userInfo.filter {
-                return $0.user.login.lowercased().contains(searchText.lowercased())
-            }
-        }
-        
-        DispatchQueue.main.async {
-            self.userListTableView.reloadData()
-        }
+        })
     }
     
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {

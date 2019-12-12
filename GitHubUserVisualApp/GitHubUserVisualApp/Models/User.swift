@@ -16,6 +16,10 @@ struct UserBasic {
     var repos: [Repository]?
 }
 
+struct UserResponse: Decodable {
+    let items: [User]
+}
+
 struct User: Decodable {
     
     let login: String
